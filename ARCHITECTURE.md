@@ -121,23 +121,33 @@ Rules of the contract:
 
 ## 4. Engine API (FastAPI @ :8787)
 
-| Endpoint | Method | Input → Output | Owner |
-|---|---|---|---|
-| `/health` | GET | → `{ ok, providers: { sarvam, gemini, aa }, mockMode }` | shared |
-| `/speech/stt` | POST multipart | audio → `{ text, detectedLanguage }` | Team A (provider) |
-| `/speech/tts` | POST | `{ text, lang }` → `{ audioBase64, cached }` | Team A |
-| `/llm/chat` | POST | `{ messages[], jsonSchema? }` → `{ content }` | Team A |
-| `/docs/ocr` | POST multipart | image/PDF → `{ text, fields }` | Team B |
-| `/docs/match` | POST | `{ a, b }` → `{ score, match }` (rapidfuzz) | Team B |
-| `/docs/affidavit` | POST | `{ familyTree, … }` → `{ pdfBase64 }` | Team B |
-| `/aa/aggregators` | GET | → aggregator list | Team C |
-| `/aa/consent` | POST | `{ aggregatorId, scopes[] }` → `{ consentId, artefact }` | Team C |
-| `/aa/verify` | POST | `{ consentId, otp }` → `{ verified }` | Team C |
-| `/aa/fetch` | POST | `{ consentId }` → `{ holdings[] }` | Team C |
-| `/data/rules` | GET | → SEBI timelines (canonical) | shared |
-| `/data/brokers` | GET | `?name=` → grievance emails | shared |
+One backend serves **both** surfaces: the portal's envelope routes and the
+extension's proxy routes (the extension's old Node `proxy/server.ts` is retired —
+the engine absorbs it, so the extension's `proxyUrl` needs no change).
+
+| Endpoint | Method | Input → Output | Shape | Consumer |
+|---|---|---|---|---|
+| `/health` | GET | → `{ ok, data: { version, providers, mockMode, spendInr, capINR }, meta, error }` | envelope | portal (+ extension logs it) |
+| `/stt` | POST multipart | audio → `{ text, detectedLang }` (Sarvam Saaras v4) | flat | extension |
+| `/tts` | POST | `{ text, language_code, … }` → `{ audios[] }` (Bulbul v3) | passthrough | extension |
+| `/gemini/{model}:generateContent` | POST | Gemini body → raw `candidates[]` | passthrough | extension |
+| `/sarvam/v1/chat/completions` | POST | Sarvam body → raw | passthrough | extension |
+| `/docs/ocr` | POST multipart | image/PDF → `{ text, fields }` | envelope | portal |
+| `/docs/match` | POST | `{ a, b }` → `{ score, match }` (rapidfuzz) | envelope | portal |
+| `/docs/affidavit` | POST | `{ familyTree, … }` → `{ pdfBase64 }` | envelope | portal |
+| `/aa/aggregators` | GET | → aggregator list | envelope | portal |
+| `/aa/consent` | POST | `{ aggregatorId, scopes[] }` → `{ consentId, artefact }` | envelope | portal |
+| `/aa/verify` | POST | `{ consentId, otp }` → `{ verified }` | envelope | portal |
+| `/aa/fetch` | POST | `{ consentId }` → `{ holdings[] }` | envelope | portal |
+| `/data/rules` | GET | → SEBI timelines (canonical) | envelope | both |
+| `/data/brokers` | GET | `?name=` → grievance emails | envelope | both |
+| `/data/nodal` | GET | `?company=` → company + RTA + lookup URL | envelope | portal |
 
 CORS allows `http://localhost:3000` (portal) and `chrome-extension://` (extension).
+
+**Envelope vs flat:** `/aa/*`, `/docs/*`, `/data/*`, `/health` use the envelope.
+`/stt`, `/tts`, `/gemini/*`, `/sarvam/*` are exact passthroughs of the vendor
+shapes the extension already parses.
 
 ---
 
@@ -183,10 +193,10 @@ Built on the existing Next.js app; refactored to be an engine client:
 
 ## 7. Cross-component data flows
 
-**A. Grievance (extension → engine):** side panel → `/llm/chat` + `/speech/*` →
-in-extension extraction → portal adapter autofills mock SCORES `:8788`. Engine
-proxies LLM/speech and serves `/data/rules` + `/data/brokers`. Keys never touch the
-extension.
+**A. Grievance (extension → engine):** side panel → `/gemini/*` (conversation) +
+`/stt` + `/tts` (voice) → in-extension extraction → portal adapter autofills mock
+SCORES `:8788`. Engine proxies Gemini/Sarvam (holds the keys) and serves
+`/data/rules` + `/data/brokers`. Keys never touch the extension.
 
 **B. Wealth map (portal → engine → AA):** consent wizard → `/aa/consent` →
 `/aa/verify` → `/aa/fetch` → nominee audit renders.
@@ -204,7 +214,7 @@ portal.
 | Area | Owner |
 |---|---|
 | Chrome extension (Saathi) | Team A |
-| `/speech/*`, `/llm/chat` (Sarvam/Gemini clients) | Team A |
+| `/stt`, `/tts`, `/gemini/*`, `/sarvam/*` (Sarvam/Gemini passthrough) | shared (engine) |
 | `/docs/*` (OCR, fuzzy match, affidavit) | Team B |
 | Web portal (Viraasat) | Team C (me) |
 | `/aa/*` (AA mock) | Team C (me) |

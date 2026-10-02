@@ -29,11 +29,11 @@ extension (Saathi) @ MV3          portal (Viraasat) @ :3000
         └──────────────┬──────────────────┘
                        ▼
       SARTHI CORE ENGINE  (FastAPI)  @ :8787
-        /speech/*   Sarvam STT/TTS        (keys here)
-        /llm/chat   Gemini / Sarvam-30b   (keys here)
-        /docs/*     OCR · fuzzy · affidavit
-        /aa/*       AA mock (Setu/Finvu shape)
-        /data/*     SEBI rules + broker directory
+        /stt /tts  Sarvam STT/TTS          (keys here)
+        /gemini/*  Gemini (extension's LLM) (keys here)
+        /docs/*    OCR · fuzzy · affidavit
+        /aa/*      AA mock (Setu/Finvu shape)
+        /data/*    SEBI rules + brokers + nodal officers
         /health
 ```
 
