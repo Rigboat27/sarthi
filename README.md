@@ -1,111 +1,83 @@
-# Sarthi 🛡️
+# sarthi
 
-**SEBI Track B — Investor Awareness, Rights & Grievance Redressal.**
+Sarthi is a SEBI Track B build that helps retail investors protect accounts, fix nominations, transmit shares after a death, and file IEPF claims without getting rejected on paperwork.
 
-Sarthi is a public-good platform that makes investor rights *usable* for
-first-time, Tier-2/3, and senior investors in India. It has three components,
-owned by three teams, that plug into one backend through a shared contract.
-
-> ⚠️ Public-good only. No stock tips, no portfolio advice. Sarthi only helps
-> investors protect their rights and their family's inheritance.
-
-## The three repos
-
-| Repo | What it is | Owner |
-|---|---|---|
-| [**sarthi-contracts**](https://github.com/Rigboat27/sarthi-contracts) | JSON Schemas + TS types + `config.json` — the single source of truth | Team C (architect) |
-| [**sarthi-engine**](https://github.com/Rigboat27/sarthi-engine) | FastAPI core backend @ `:8787` — speech, LLM, docs, AA mock, shared data | shared |
-| [**sarthi-portal**](https://github.com/Rigboat27/sarthi-portal) | Viraasat web app (Next.js) @ `:3000` — nominee audit, legal docs, IEPF pre-checker | Team C |
-| *sarthi-extension* (Team A) | Chrome MV3 "Saathi" grievance agent — talks to the engine | Team A |
-| *sarthi-mock-scores* (Team A) | Static SCORES/IEPF replicas @ `:8788` for demo | Team A |
-
-## Architecture
+Four repos work as one system. This repo is the map. Code lives in the other three.
 
 ```
-extension (Saathi) @ MV3          portal (Viraasat) @ :3000
-  · voice/text side panel            · nominee audit / wealth map
-  · DOM autofill                     · legal docs / IEPF pre-checker
-        │  http://127.0.0.1:8787           │  http://127.0.0.1:8787
-        └──────────────┬──────────────────┘
-                       ▼
-      SARTHI CORE ENGINE  (FastAPI)  @ :8787
-        /stt /tts  Sarvam STT/TTS          (keys here)
-        /gemini/*  Gemini (extension's LLM) (keys here)
-        /docs/*    OCR · fuzzy · affidavit
-        /aa/*      AA mock (Setu/Finvu shape)
-        /data/*    SEBI rules + brokers + nodal officers
-        /health
++------------------------+      +------------------------+
+| extension (Saathi)     |      | portal (Viraasat)      |
+| Chrome MV3 side panel  |      | Next.js 14 on port 3000|
+| voice and text intake  |      | wealth map and docs    |
+| DOM autofill for SCORES|      | nominee audit and PDFs |
++-----------+------------+      +-----------+------------+
+            |                               |
+            | HTTP to 127.0.0.1:8787        | HTTP to 127.0.0.1:8787
+            +---------------+----------------+
+                            |
+                +-----------v------------+
+                | sarthi-engine          |
+                | FastAPI on port 8787   |
+                | speech, LLM, docs,     |
+                | AA mock, shared data   |
+                +-----------+------------+
+                            |
+            +---------------+---------------+
+            |               |               |
+      Sarvam API    Gemini API      mock AA data
+      speech only   chat and vision  Setu and Finvu shape
 ```
 
-**Ports:** engine `8787` · portal `3000` · mock SCORES `8788`.
+## Repos
 
-**Keys never reach the browser.** The engine holds Sarvam + Gemini keys and
-proxies the vendors. Extension and portal only ever talk to `127.0.0.1:8787`.
+- `sarthi-contracts` holds JSON Schemas, TypeScript types, and `config.json`. Every shared field name is defined there once.
+- `sarthi-engine` holds the FastAPI backend on port 8787. It owns the API keys and serves speech, LLM, docs, AA, and shared data.
+- `sarthi-portal` holds the Viraasat Next.js app on port 3000. It calls the engine and holds no keys.
+- `extension` (teammate repo `pranshoe/saathi`) holds the Saathi grievance agent. It calls the engine and holds no keys.
 
-## The contract flow (how teams stay compatible)
+## Ports
 
-`sarthi-contracts` is the physical guarantee that the three codebases agree.
-Everything a component sends or receives is defined there once:
+- Engine - FastAPI - 127.0.0.1:8787
+- Portal - Next.js - localhost:3000
+- Mock SCORES and IEPF pages - static HTML on 8788 (teammate owned)
 
-```
-sarthi-contracts/
-  schemas/            apiEnvelope, holding, aaConsent, aaFetchResponse,
-                      grievanceState, affidavit
-  types/index.ts      TS types mirroring the schemas (extension + portal)
-  config.json         ports, URLs, provider flags
-```
+## Contract flow
 
-Rules:
+`sarthi-contracts` defines `apiEnvelope`, `holding`, `aaConsent`, `aaFetchResponse`, `grievanceState`, and `affidavit`. The engine validates against these with Pydantic models plus `pytest` and `jsonschema`. The portal validates fixtures with `ajv` through `npm run test:contracts`. A field change starts in `sarthi-contracts`, then the engine model and the TS types get updated. Builds fail loudly when a consumer lags.
 
-1. **Every** response is wrapped in the envelope:
-   `{ ok, data, meta:{tokens, costEstimateInr, mock}, error }`.
-2. A component **derives** its types from these files — extension/portal use the
-   TS types, the engine keeps Pydantic models in lockstep (`engine/app/models`).
-   Nobody redefines a shared field name locally.
-3. **Bump process** — to change a field:
-   1. edit `schemas/*.json` **and** `types/index.ts` in `sarthi-contracts`;
-   2. bump `config.json` `version`;
-   3. update the engine's Pydantic model;
-   4. bump the `contracts/` submodule (or run `npm run sync:contracts`) in each
-      consumer repo. Their typecheck breaks loudly if they lag — that's the point.
-4. **Runtime data is not a type.** SEBI rules + broker directory live only in the
-   engine (`app/data/*.json`) and are fetched at runtime via `/data/rules` and
-   `/data/brokers`, so a timeline fix lands in both extension and portal at once.
+Most responses use the envelope with `ok`, `data`, `meta`, and `error`. The extension passthrough routes (`/stt`, `/tts`, `/gemini/*`, `/llm/chat`) return raw vendor shapes because the extension already parses them.
 
-## Cross-component data flows
+## Data flows
 
-- **Grievance (extension → engine):** side panel → `/llm/chat` + `/speech/*` →
-  in-extension extraction → portal adapter autofills mock SCORES. The engine
-  proxies LLM/speech and serves `/data/rules` + `/data/brokers`.
-- **Wealth map (portal → engine → AA):** consent wizard → `/aa/consent` →
-  `/aa/verify` → `/aa/fetch` → nominee audit.
-- **Legal/IEPF (portal → engine):** upload → `/docs/ocr` → `/docs/match` →
-  `/docs/affidavit` → printable doc.
+- Grievance - extension calls `/llm/chat` and `/speech/*`, extracts `GrievanceState`, drafts the broker email, then autofills mock SCORES.
+- Wealth map - portal calls `/aa/consent`, then `/aa/verify`, then `/aa/fetch`, then renders the nominee audit.
+- Legal and IEPF - portal uploads to `/docs/ocr`, checks with `/docs/match`, generates with `/docs/affidavit` or `/docs/name-affidavit`, downloads PDFs.
+- Shared truth - `/data/rules`, `/data/brokers`, and `/data/nodal` serve SEBI timelines, broker grievance emails, and company routing. Extension and portal read the same JSON.
 
-## Run everything locally
+## Run everything
 
-```bash
-# 1. clone (team repos live under your own org; these are the three public ones)
-git clone https://github.com/Rigboat27/sarthi-engine
-git clone https://github.com/Rigboat27/sarthi-portal
-git clone https://github.com/Rigboat27/sarthi-contracts
-
-# 2. engine (terminal 1)
+```powershell
+# terminal 1 - engine
 cd sarthi-engine
-python -m venv .venv && .venv\Scripts\activate   # Windows
+python -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
-python run.py                                    # http://127.0.0.1:8787
+copy .env.example .env
+python run.py
 
-# 3. portal (terminal 2)
+# terminal 2 - portal
 cd sarthi-portal
 npm install
-NEXT_PUBLIC_MOCK_AA=false npm run dev            # http://localhost:3000
+$env:NEXT_PUBLIC_MOCK_AA="false"
+$env:NEXT_PUBLIC_API_BASE="http://127.0.0.1:8787"
+npm run dev
 ```
 
-Everything defaults to **mock mode** — zero keys, zero spend. Set
-`MOCK_MODE=false` + keys in the engine's `.env` only when going live.
+Open http://localhost:3000. The footer shows engine status. Mock mode needs no keys. Live Gemini OCR needs `GEMINI_API_KEY` in the engine `.env` with `MOCK_MODE=false`.
 
-## See also
+## Docs in this repo
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the full locked-down architecture.
-- Each repo's `README.md` for its own run instructions.
+- `ARCHITECTURE.md` records locked ports, routes, and ownership.
+- `TECHNICAL.md` maps the build to the judging rubrics with mock vs live called out.
+- `VOICEOVER.md` holds the demo narration.
+- `DEMO.md` holds the click by click demo run.
